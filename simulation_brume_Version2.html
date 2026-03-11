@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Simulation Brume</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: rgb(244, 240, 234);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh;
+    padding: 18px;
+    font-family: 'Segoe UI', Arial, sans-serif;
+  }
+  .container {
+    display: flex;
+    gap: 24px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .panel-box {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .panel-box h2 {
+    font-size: 0.95rem;
+    margin-bottom: 8px;
+    font-weight: 600;
+  }
+  .label-direct h2 { color: #2a7ab5; }
+  .label-brume h2  { color: #c07028; }
+  canvas {
+    border-radius: 10px;
+    display: block;
+  }
+  .stats {
+    margin-top: 10px;
+    font-size: 0.82rem;
+    display: flex;
+    gap: 20px;
+    justify-content: center;
+  }
+  .stat { text-align: center; }
+  .stat .val { font-size: 1.4rem; font-weight: 700; }
+  .stat .lbl { font-size: 0.7rem; color: #888; }
+  .color-direct .val { color: #2a7ab5; }
+  .color-brume .val  { color: #c07028; }
+  .controls {
+    margin-top: 16px;
+    display: flex;
+    gap: 12px;
+  }
+  button {
+    background: #444;
+    color: #fff;
+    border: none;
+    padding: 8px 22px;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  button:hover { background: #666; }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <div class="panel-box label-direct">
+    <h2>Sans brume</h2>
+    <canvas id="cvDirect" width="320" height="420"></canvas>
+    <div class="stats">
+      <div class="stat color-direct">
+        <div class="val" id="hitDirect">0</div>
+        <div class="lbl">photons captés</div>
+      </div>
+      <div class="stat color-direct">
+        <div class="val" id="pctDirect">0 %</div>
+        <div class="lbl">taux de capture</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel-box label-brume">
+    <h2>Avec brume</h2>
+    <canvas id="cvBrume" width="320" height="420"></canvas>
+    <div class="stats">
+      <div class="stat color-brume">
+        <div class="val" id="hitBrume">0</div>
+        <div class="lbl">photons captés</div>
+      </div>
+      <div class="stat color-brume">
+        <div class="val" id="pctBrume">0 %</div>
+        <div class="lbl">taux de capture</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="controls">
+  <button id="btnReset">⟳ Recommencer</button>
+  <button id="btnPause">⏸ Pause</button>
+</div>
+
+<script>
+const W = 320, H = 420;
+const PANEL_Y = H - 38;
+const PANEL_X0 = 60, PANEL_X1 = W - 60;
+const PANEL_H = 12;
+const SPAWN_INTERVAL = 80;
+const PHOTON_SPEED = 2.2;
+const DROPLET_COUNT = 28;
+const DROPLET_R_MIN = 5, DROPLET_R_MAX = 11;
+const BRUME_Y0 = 140, BRUME_Y1 = 280;
+const P_REFLECT = 0.35, P_ABSORB = 0.18;
+
+const BG = 'rgb(244,240,234)';
+
+let photonsDirect = [], photonsBrume = [], droplets = [];
+let statDirect = { emitted: 0, hit: 0 };
+let statBrume  = { emitted: 0, hit: 0 };
+let paused = false;
+
+const cvD = document.getElementById('cvDirect');
+const cvB = document.getElementById('cvBrume');
+const ctxD = cvD.getContext('2d');
+const ctxB = cvB.getContext('2d');
+
+function makeDroplets() {
+  droplets = [];
+  for (let i = 0; i < DROPLET_COUNT; i++) {
+    droplets.push({
+      x: 20 + Math.random() * (W - 40),
+      y: BRUME_Y0 + Math.random() * (BRUME_Y1 - BRUME_Y0),
+      r: DROPLET_R_MIN + Math.random() * (DROPLET_R_MAX - DROPLET_R_MIN)
+    });
+  }
+}
+
+function spawnPhoton() {
+  const x = PANEL_X0 + Math.random() * (PANEL_X1 - PANEL_X0);
+  const base = { x, y: -4, vx: 0, vy: PHOTON_SPEED, alive: true, hit: false, reflected: false, absorbed: false, scattered: false };
+  photonsDirect.push({ ...base });
+  photonsBrume.push({ ...structuredClone(base) });
+  statDirect.emitted++;
+  statBrume.emitted++;
+}
+
+function updatePhotons(list, stat, withDroplets) {
+  for (let p of list) {
+    if (!p.alive) continue;
+    p.x += p.vx;
+    p.y += p.vy;
+
+    if (withDroplets && !p.scattered) {
+      for (let d of droplets) {
+        const dx = p.x - d.x, dy = p.y - d.y;
+        if (dx * dx + dy * dy < d.r * d.r) {
+          const roll = Math.random();
+          if (roll < P_REFLECT) {
+            p.vy = -PHOTON_SPEED * (0.5 + Math.random() * 0.5);
+            p.vx = (Math.random() - 0.5) * PHOTON_SPEED * 1.4;
+            p.reflected = true;
+            p.scattered = true;
+          } else if (roll < P_REFLECT + P_ABSORB) {
+            p.alive = false;
+            p.absorbed = true;
+          } else {
+            const angle = (Math.random() - 0.5) * Math.PI * 0.8;
+            p.vx = Math.sin(angle) * PHOTON_SPEED;
+            p.vy = Math.cos(angle) * PHOTON_SPEED * (0.6 + Math.random() * 0.5);
+            if (p.vy < 0.3) p.vy = 0.3;
+            p.scattered = true;
+          }
+          break;
+        }
+      }
+    }
+
+    if (p.y >= PANEL_Y && p.y <= PANEL_Y + PANEL_H && p.x >= PANEL_X0 && p.x <= PANEL_X1 && !p.hit && !p.reflected) {
+      p.hit = true;
+      p.alive = false;
+      stat.hit++;
+    }
+
+    if (p.y > H + 10 || p.y < -20 || p.x < -20 || p.x > W + 20) {
+      p.alive = false;
+    }
+  }
+}
+
+function drawScene(ctx, list, withDroplets) {
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = BG;
+  ctx.fillRect(0, 0, W, H);
+
+  // Brume zone
+  if (withDroplets) {
+    ctx.fillStyle = 'rgba(160,200,230,0.18)';
+    ctx.fillRect(0, BRUME_Y0 - 10, W, BRUME_Y1 - BRUME_Y0 + 20);
+    for (let d of droplets) {
+      ctx.beginPath();
+      ctx.arc(d.x, d.y, d.r, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(100,170,220,0.3)';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(80,150,200,0.5)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+  }
+
+  // Panel
+  ctx.fillStyle = '#2a4d6e';
+  ctx.fillRect(PANEL_X0, PANEL_Y, PANEL_X1 - PANEL_X0, PANEL_H);
+  ctx.strokeStyle = '#3a7fc1';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(PANEL_X0, PANEL_Y, PANEL_X1 - PANEL_X0, PANEL_H);
+  ctx.fillStyle = '#3a7fc1';
+  ctx.font = '10px Segoe UI, Arial, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('PANNEAU', W / 2, PANEL_Y + PANEL_H + 13);
+
+  // Photons
+  for (let p of list) {
+    if (p.absorbed) continue;
+    let color, radius = 2.8, alpha = 1;
+    if (p.hit) {
+      color = '#38a858'; radius = 3.2;
+    } else if (p.reflected) {
+      color = '#d04040';
+      alpha = Math.max(0.15, 1 - Math.abs(p.y) / H);
+    } else if (p.scattered) {
+      color = '#d4a020'; alpha = 0.75;
+    } else {
+      color = '#e8b800';
+    }
+    if (!p.alive && !p.hit) alpha *= 0.2;
+
+    ctx.globalAlpha = alpha;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+}
+
+function updateStats() {
+  document.getElementById('hitDirect').textContent = statDirect.hit;
+  document.getElementById('hitBrume').textContent = statBrume.hit;
+  const pD = statDirect.emitted > 0 ? Math.round(statDirect.hit / statDirect.emitted * 100) : 0;
+  const pB = statBrume.emitted > 0 ? Math.round(statBrume.hit / statBrume.emitted * 100) : 0;
+  document.getElementById('pctDirect').textContent = pD + ' %';
+  document.getElementById('pctBrume').textContent = pB + ' %';
+}
+
+function frame() {
+  if (!paused) {
+    updatePhotons(photonsDirect, statDirect, false);
+    updatePhotons(photonsBrume, statBrume, true);
+    if (photonsDirect.length > 300) photonsDirect = photonsDirect.filter(p => p.alive || p.hit);
+    if (photonsBrume.length > 300) photonsBrume = photonsBrume.filter(p => p.alive || p.hit);
+  }
+  drawScene(ctxD, photonsDirect, false);
+  drawScene(ctxB, photonsBrume, true);
+  updateStats();
+  requestAnimationFrame(frame);
+}
+
+function reset() {
+  photonsDirect = []; photonsBrume = [];
+  statDirect = { emitted: 0, hit: 0 };
+  statBrume  = { emitted: 0, hit: 0 };
+  makeDroplets();
+}
+
+document.getElementById('btnReset').addEventListener('click', reset);
+document.getElementById('btnPause').addEventListener('click', () => {
+  paused = !paused;
+  document.getElementById('btnPause').textContent = paused ? '▶ Reprendre' : '⏸ Pause';
+});
+
+makeDroplets();
+setInterval(() => { if (!paused) spawnPhoton(); }, SPAWN_INTERVAL);
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
